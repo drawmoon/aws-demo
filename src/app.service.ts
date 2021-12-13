@@ -1,6 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { S3 } from 'aws-sdk';
-import { Buckets } from 'aws-sdk/clients/s3';
 import { readFileSync, writeFileSync } from 'fs';
 import { join, posix } from 'path';
 import { v4 as uuidV4 } from 'uuid';
@@ -44,15 +43,42 @@ export class AppService implements OnModuleInit {
     await this.createBucket();
   }
 
+  /**
+   * 判断存储桶是否可用
+   */
+  async canUseBucket(): Promise<'available' | 'reject' | 'invalid'> {
+    try {
+      await this.client.headBucket({ Bucket: this.bucketName }).promise();
+      return 'available';
+    } catch (err) {
+      if ('statusCode' in err) {
+        if (err.statusCode === HttpStatus.FORBIDDEN) {
+          return 'reject';
+        }
+
+        if (err.statusCode === HttpStatus.NOT_FOUND) {
+          return 'invalid';
+        }
+      }
+
+      throw err;
+    }
+  }
+
+  /**
+   * 判断存储桶是否存在，不存在则创建存储桶
+   */
   async createBucket(): Promise<void> {
     console.time('创建存储桶耗时统计');
 
     try {
-      const buckets = await this.listBucket();
+      const state = await this.canUseBucket();
 
-      if (buckets.findIndex((x) => x.Name === this.bucketName) === -1) {
+      if (state === 'invalid') {
         await this.client.createBucket({ Bucket: this.bucketName }).promise();
         this.logger.debug(`创建存储桶 '${this.bucketName}' 成功！`);
+      } else if (state === 'reject') {
+        this.logger.log(`无权限访问存储桶：${this.bucketName}`);
       }
     } catch (err) {
       this.logger.error(`创建存储桶失败：${err.message}`, err.stack);
@@ -61,15 +87,9 @@ export class AppService implements OnModuleInit {
     console.timeEnd('创建存储桶耗时统计');
   }
 
-  async listBucket(): Promise<Buckets> {
-    try {
-      const result = await this.client.listBuckets().promise();
-      return result.Buckets;
-    } catch (err) {
-      this.logger.error(`获取存储桶失败：${err.message}`, err.stack);
-    }
-  }
-
+  /**
+   * 从云端下载资源至本地
+   */
   async getAssets(): Promise<void> {
     console.time('下载图片耗时统计');
 
@@ -114,6 +134,9 @@ export class AppService implements OnModuleInit {
     console.timeEnd('下载压缩包耗时统计');
   }
 
+  /**
+   * 从本地上传资源至云端
+   */
   async putAssets(): Promise<void> {
     console.time('上载图片耗时统计');
 
